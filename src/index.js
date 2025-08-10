@@ -6,6 +6,16 @@ const { twiml: { VoiceResponse } } = require('twilio');
 const products = require('./products.json'); // Your catalog
 const app = express();
 
+
+const { OpenAI } = require('openai');
+const openai = new OpenAI({ apiKey: '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' });
+
+// const { Configuration, OpenAIApi } = require('openai');
+// const configuration = new Configuration({ 'apiKey': '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' });
+// const openai = new OpenAIApi(configuration);
+
+
+
 app.use(cors());
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
@@ -60,19 +70,30 @@ app.post('/voice', (req, res) => {
 
 // Step 2: Process speech, parse inputs, search products, and read results
 app.post('/process-speech', (req, res) => {
-  const callSid = req.body.CallSid;
+  // const callSid = req.body.CallSid;
+  // const speechResult = req.body.SpeechResult || '';
+  // const session = getSession(callSid);
+  // const response = new VoiceResponse();
+
+  // // Parse info (basic regex, improve for production)
+  // const yearMatch = speechResult.match(/(\d{4})/);
+  // const makeMatch = speechResult.match(/(Toyota|Honda|Ford|Nissan|Chevrolet)/i);
+  // const modelMatch = speechResult.match(/(Camry|Accord|Civic|Focus|Corolla)/i);
+  // const partMatch = speechResult.match(/(brake pads?|oil filter|engine|transmission)/i);
+
+  // if (!(yearMatch && makeMatch && modelMatch && partMatch)) {
+  //   response.say('Sorry, I did not understand. Please say the year, make, model, and part again.');
+  //   response.redirect('/voice');
+  //   return res.type('text/xml').send(response.toString());
+  // }
+
   const speechResult = req.body.SpeechResult || '';
-  const session = getSession(callSid);
   const response = new VoiceResponse();
 
-  // Parse info (basic regex, improve for production)
-  const yearMatch = speechResult.match(/(\d{4})/);
-  const makeMatch = speechResult.match(/(Toyota|Honda|Ford|Nissan|Chevrolet)/i);
-  const modelMatch = speechResult.match(/(Camry|Accord|Civic|Focus|Corolla)/i);
-  const partMatch = speechResult.match(/(brake pads?|oil filter|engine|transmission)/i);
+  const parsed = parseCarPartsSpeech(speechResult);
 
-  if (!(yearMatch && makeMatch && modelMatch && partMatch)) {
-    response.say('Sorry, I did not understand. Please say the year, make, model, and part again.');
+  if (!parsed || !parsed.year || !parsed.make || !parsed.model || !parsed.part) {
+    response.say('Sorry, I did not understand your request. Please try again.');
     response.redirect('/voice');
     return res.type('text/xml').send(response.toString());
   }
@@ -177,6 +198,29 @@ app.post('/handle-choice', (req, res) => {
   response.redirect('/process-speech');
   return res.type('text/xml').send(response.toString());
 });
+
+
+async function parseCarPartsSpeech(speechText) {
+  const prompt = `
+Extract Year, Make, Model, and Part from this sentence:
+"${speechText}"
+Respond ONLY with a JSON object with keys: year, make, model, part.
+`;
+
+  const completion = await openai.createCompletion({
+    model: "text-davinci-003",
+    prompt,
+    max_tokens: 50,
+  });
+
+  try {
+    const json = JSON.parse(completion.data.choices[0].text.trim());
+    return json;
+  } catch {
+    return null;
+  }
+}
+
 
 // Start Express server
 const port = process.env.PORT || 4000;
