@@ -1,20 +1,10 @@
 const express = require('express');
-require('dotenv').config();
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const fetch = require('node-fetch'); // npm i node-fetch@2
 const { twiml: { VoiceResponse } } = require('twilio');
 const products = require('./products.json'); // Your catalog
 const app = express();
-
-
-
-
-// const { OpenAI } = require('openai');
-// const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-
-
 
 app.use(cors());
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -83,20 +73,6 @@ app.post('/process-speech', (req, res) => {
 
   if (!(yearMatch && makeMatch && modelMatch && partMatch)) {
     response.say('Sorry, I did not understand. Please say the year, make, model, and part again.');
-    response.redirect('/voice');
-    return res.type('text/xml').send(response.toString());
-  }
-
-  // const speechResult = req.body.SpeechResult || '';
-  // const response = new VoiceResponse();
-
-  // const parsed = parseCarPartsSpeech(speechResult);
-
-
-
-
-  if (!parsed || !parsed.year || !parsed.make || !parsed.model || !parsed.part) {
-    response.say('Sorry, I did not understand your request. Please try again.');
     response.redirect('/voice');
     return res.type('text/xml').send(response.toString());
   }
@@ -201,29 +177,6 @@ app.post('/handle-choice', (req, res) => {
   response.redirect('/process-speech');
   return res.type('text/xml').send(response.toString());
 });
-
-
-async function parseCarPartsSpeech(speechText) {
-  const prompt = `
-Extract Year, Make, Model, and Part from this sentence:
-"${speechText}"
-Respond ONLY with a JSON object with keys: year, make, model, part.
-`;
-
-  const completion = await openai.createCompletion({
-    model: "text-davinci-003",
-    prompt,
-    max_tokens: 50,
-  });
-
-  try {
-    const json = JSON.parse(completion.data.choices[0].text.trim());
-    return json;
-  } catch {
-    return null;
-  }
-}
-
 
 // Start Express server
 const port = process.env.PORT || 4000;
