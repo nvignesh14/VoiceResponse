@@ -7,7 +7,10 @@
     "start": "node src/index.js"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "node-fetch": "^3.3.2",
+    "twilio": "^5.8.0"
   },
   "author": "",
   "license": "ISC"

@@ -1,0 +1,20 @@
+[
+  {
+    "title": "Toyota Camry Brake Pads",
+    "partType": "brake pads",
+    "price": 45.99,
+    "fits": [
+      { "year": 2020, "make": "Toyota", "model": "Camry" },
+      { "year": 2019, "make": "Toyota", "model": "Camry" }
+    ]
+  },
+  {
+    "title": "Honda Accord Oil Filter",
+    "partType": "oil filter",
+    "price": 12.99,
+    "fits": [
+      { "year": 2021, "make": "Honda", "model": "Accord" },
+      { "year": 2020, "make": "Honda", "model": "Accord" }
+    ]
+  }
+]
