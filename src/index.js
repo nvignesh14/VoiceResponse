@@ -1,4 +1,5 @@
 const express = require('express');
+require('dotenv').config();
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const fetch = require('node-fetch'); // npm i node-fetch@2
@@ -7,12 +8,11 @@ const products = require('./products.json'); // Your catalog
 const app = express();
 
 
-const { OpenAI } = require('openai');
-const openai = new OpenAI({ apiKey: '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' });
 
-// const { Configuration, OpenAIApi } = require('openai');
-// const configuration = new Configuration({ 'apiKey': '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' });
-// const openai = new OpenAIApi(configuration);
+// ...existing code...
+const { OpenAI } = require('openai');
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// ...existing code...
 
 
 
