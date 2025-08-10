@@ -9,10 +9,10 @@ const app = express();
 
 
 
-// ...existing code...
-const { OpenAI } = require('openai');
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-// ...existing code...
+
+// const { OpenAI } = require('openai');
+// const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 
 
 
@@ -70,27 +70,30 @@ app.post('/voice', (req, res) => {
 
 // Step 2: Process speech, parse inputs, search products, and read results
 app.post('/process-speech', (req, res) => {
-  // const callSid = req.body.CallSid;
-  // const speechResult = req.body.SpeechResult || '';
-  // const session = getSession(callSid);
-  // const response = new VoiceResponse();
-
-  // // Parse info (basic regex, improve for production)
-  // const yearMatch = speechResult.match(/(\d{4})/);
-  // const makeMatch = speechResult.match(/(Toyota|Honda|Ford|Nissan|Chevrolet)/i);
-  // const modelMatch = speechResult.match(/(Camry|Accord|Civic|Focus|Corolla)/i);
-  // const partMatch = speechResult.match(/(brake pads?|oil filter|engine|transmission)/i);
-
-  // if (!(yearMatch && makeMatch && modelMatch && partMatch)) {
-  //   response.say('Sorry, I did not understand. Please say the year, make, model, and part again.');
-  //   response.redirect('/voice');
-  //   return res.type('text/xml').send(response.toString());
-  // }
-
+  const callSid = req.body.CallSid;
   const speechResult = req.body.SpeechResult || '';
+  const session = getSession(callSid);
   const response = new VoiceResponse();
 
-  const parsed = parseCarPartsSpeech(speechResult);
+  // Parse info (basic regex, improve for production)
+  const yearMatch = speechResult.match(/(\d{4})/);
+  const makeMatch = speechResult.match(/(Toyota|Honda|Ford|Nissan|Chevrolet)/i);
+  const modelMatch = speechResult.match(/(Camry|Accord|Civic|Focus|Corolla)/i);
+  const partMatch = speechResult.match(/(brake pads?|oil filter|engine|transmission)/i);
+
+  if (!(yearMatch && makeMatch && modelMatch && partMatch)) {
+    response.say('Sorry, I did not understand. Please say the year, make, model, and part again.');
+    response.redirect('/voice');
+    return res.type('text/xml').send(response.toString());
+  }
+
+  // const speechResult = req.body.SpeechResult || '';
+  // const response = new VoiceResponse();
+
+  // const parsed = parseCarPartsSpeech(speechResult);
+
+
+
 
   if (!parsed || !parsed.year || !parsed.make || !parsed.model || !parsed.part) {
     response.say('Sorry, I did not understand your request. Please try again.');
