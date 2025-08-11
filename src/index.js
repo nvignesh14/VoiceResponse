@@ -1,33 +1,70 @@
+// backend/server.js
+// Node 18+ recommended
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const fetch = require('node-fetch'); // npm i node-fetch@2
+//const { Configuration, OpenAIApi } = require('openai');
+const { OpenAI } = require('openai');
 const { twiml: { VoiceResponse } } = require('twilio');
-const products = require('./products.json'); // Your catalog
+const products = require('./products.json'); // sample catalog file
+
+require('dotenv').config();
+
 const app = express();
-
 app.use(cors());
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: false })); // for Twilio
+app.use(bodyParser.json()); // for frontend
 
-// In-memory session store (simple for demo)
-const sessions = {};
+// OpenAI setup (expect OPENAI_API_KEY in env)
+// const openaiConfig = new Configuration({ apiKey: process.env.OPENAI_API_KEY });
+// const openai = new OpenAIApi(openaiConfig);
 
-function getSession(callSid) {
-  if (!sessions[callSid]) {
-    sessions[callSid] = { cart: [], step: 0 };
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+
+
+// --- Helper: call OpenAI to extract structured info ---
+async function parseVehicleInfo(transcript) {
+  const prompt = `
+You are an assistant that extracts vehicle search fields from user speech.
+Input: a single sentence where a person says what they want.
+Return ONLY valid JSON with keys: year (string), make (string), model (string), item (string), extras (array of strings).
+If a field isn't present, set it to an empty string or empty array.
+Examples:
+  Input: "2018 Toyota Camry brake pads"
+  Output: {"year":"2018","make":"Toyota","model":"Camry","item":"brake pads","extras":[]}
+Now extract from this input:
+"${transcript}"
+`;
+  try {
+    const resp = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 200,
+      temperature: 0
+    });
+    const text = resp.choices[0].message.content.trim();
+
+    // Defensive parse: try to find JSON substring
+    const jsonStart = text.indexOf('{');
+    const jsonText = jsonStart >= 0 ? text.slice(jsonStart) : text;
+    return JSON.parse(jsonText);
+  } catch (err) {
+    console.error('OpenAI parse error:', err?.response?.data || err.message || err);
+    return { year: '', make: '', model: '', item: '', extras: [] };
   }
-  return sessions[callSid];
 }
 
-// Search products helper (reuse your logic)
-function searchParts(year, make, model, part) {
+// --- Simple product search reusing earlier logic ---
+function searchParts(year, make, model, item) {
   const qYear = (year || '').toString();
   const qMake = (make || '').toLowerCase();
   const qModel = (model || '').toLowerCase();
-  const qPart = (part || '').toLowerCase();
+  const qItem = (item || '').toLowerCase();
 
   return products.filter(p => {
+    // fitment check
     const fits = p.fits || [];
     const fitMatch = fits.some(f => {
       const yearMatch = !qYear || f.year.toString() === qYear;
@@ -35,161 +72,133 @@ function searchParts(year, make, model, part) {
       const modelMatch = !qModel || f.model.toLowerCase() === qModel;
       return yearMatch && makeMatch && modelMatch;
     });
-    const partMatch = !qPart || p.title.toLowerCase().includes(qPart) || p.partType.toLowerCase().includes(qPart);
-    return fitMatch && partMatch;
+    const itemMatch = !qItem || p.title.toLowerCase().includes(qItem) || p.partType.toLowerCase().includes(qItem);
+    return fitMatch && itemMatch;
   });
 }
 
-// Step 1: Welcome and gather Year/Make/Model/Part
-app.post('/voice', (req, res) => {
-  const callSid = req.body.CallSid;
-  const response = new VoiceResponse();
+// ---------- API used by frontend (local UI) ----------
+app.post('/api/parse-and-search', async (req, res) => {
+  const { transcript } = req.body;
+  if (!transcript) return res.status(400).json({ error: 'transcript required' });
+  const parsed = await parseVehicleInfo(transcript);
+  const results = searchParts(parsed.year, parsed.make, parsed.model, parsed.item);
+  res.json({ parsed, results });
+});
 
-  const gather = response.gather({
+// ---------- Twilio voice endpoints (inbound call flow) ----------
+/*
+  /voice
+    -> Twilio posts here on incoming call
+    -> Responds with <Gather input="speech"> to capture caller speech
+  /process-speech
+    -> Twilio posts speech result to this endpoint
+    -> parse using OpenAI, search, respond with TwiML <Say> and <Gather digits> for choices
+  /handle-choice
+    -> Twilio posts digit pressed; manage cart in-memory per CallSid (demo)
+*/
+
+const sessions = {}; // in-memory; for demo only
+
+app.post('/voice', (req, res) => {
+  const vr = new VoiceResponse();
+  const gather = vr.gather({
     input: 'speech',
     action: '/process-speech',
     method: 'POST',
     speechTimeout: 'auto',
     language: 'en-US',
-    hints: 'Toyota, Honda, Ford, Camry, Accord, Brake Pads, Oil Filter',
+    hints: 'Toyota, Honda, Camry, Accord, brake pads, oil filter'
   });
-
-  gather.say('Welcome to Auto Parts Finder. Please say the year, make, model, and part you want to search for.');
-  res.type('text/xml').send(response.toString());
+  gather.say('Welcome to Auto Parts Finder. Please say the year, make, model, and the part you need.');
+  // If no input, repeat
+  vr.redirect('/voice');
+  res.type('text/xml').send(vr.toString());
 });
 
-// Step 2: Process speech, parse inputs, search products, and read results
-app.post('/process-speech', (req, res) => {
+app.post('/process-speech', async (req, res) => {
   const callSid = req.body.CallSid;
-  const speechResult = req.body.SpeechResult || '';
-  const session = getSession(callSid);
-  const response = new VoiceResponse();
+  const speech = req.body.SpeechResult || '';
+  const vr = new VoiceResponse();
 
-  // Parse info (basic regex, improve for production)
-  const yearMatch = speechResult.match(/(\d{4})/);
-  const makeMatch = speechResult.match(/(Toyota|Honda|Ford|Nissan|Chevrolet)/i);
-  const modelMatch = speechResult.match(/(Camry|Accord|Civic|Focus|Corolla)/i);
-  const partMatch = speechResult.match(/(brake pads?|oil filter|engine|transmission)/i);
+  const parsed = await parseVehicleInfo(speech);
+  const results = searchParts(parsed.year, parsed.make, parsed.model, parsed.item);
 
-  if (!(yearMatch && makeMatch && modelMatch && partMatch)) {
-    response.say('Sorry, I did not understand. Please say the year, make, model, and part again.');
-    response.redirect('/voice');
-    return res.type('text/xml').send(response.toString());
+  // Save session
+  sessions[callSid] = sessions[callSid] || { cart: [] };
+  sessions[callSid].parsed = parsed;
+  sessions[callSid].results = results;
+
+  if (!results || results.length === 0) {
+    vr.say(`Sorry, I couldn't find parts for ${parsed.year} ${parsed.make} ${parsed.model} ${parsed.item}. Please try again.`);
+    vr.redirect('/voice');
+    return res.type('text/xml').send(vr.toString());
   }
 
-  // Save search params in session
-  session.searchParams = {
-    year: yearMatch[1],
-    make: makeMatch[1],
-    model: modelMatch[1],
-    part: partMatch[1],
-  };
+  vr.say(`I found ${results.length} items for ${parsed.year} ${parsed.make} ${parsed.model}.`);
 
-  // Search products
-  const found = searchParts(session.searchParams.year, session.searchParams.make, session.searchParams.model, session.searchParams.part);
-  session.searchResults = found.slice(0, 5); // Limit to 5 results for demo
-  session.step = 2;
-
-  if (session.searchResults.length === 0) {
-    response.say(`No parts found for your ${session.searchParams.year} ${session.searchParams.make} ${session.searchParams.model} ${session.searchParams.part}.`);
-    response.say('Please try again.');
-    response.redirect('/voice');
-    return res.type('text/xml').send(response.toString());
-  }
-
-  response.say(`I found ${session.searchResults.length} parts for your ${session.searchParams.year} ${session.searchParams.make} ${session.searchParams.model} ${session.searchParams.part}.`);
-  session.searchResults.forEach((p, i) => {
-    response.say(`Press ${i + 1} to add ${p.title} priced at ${p.price} dollars to your cart.`);
+  // read top 5 with a digit choice
+  results.slice(0, 5).forEach((p, i) => {
+    vr.say(`Press ${i + 1} to add ${p.title} priced at ${p.price} dollars to your cart.`);
   });
-  response.say('Press 9 to hear your cart and get a quote.');
-  response.say('Press 0 to end the call.');
+  vr.say('Press 9 to hear your cart and get a quote. Press 0 to end this call.');
 
-  // Gather digits for choice
-  const gather = response.gather({
-    numDigits: 1,
-    action: '/handle-choice',
-    method: 'POST',
-    timeout: 10
-  });
-  res.type('text/xml').send(response.toString());
+  vr.gather({ numDigits: 1, action: '/handle-choice', method: 'POST', timeout: 12 });
+  res.type('text/xml').send(vr.toString());
 });
 
-// Step 3: Handle digit input for adding items, quoting, or ending
 app.post('/handle-choice', (req, res) => {
   const callSid = req.body.CallSid;
   const digit = req.body.Digits;
-  const session = getSession(callSid);
-  const response = new VoiceResponse();
+  const vr = new VoiceResponse();
+  const session = sessions[callSid];
 
-  if (!session.searchResults) {
-    response.say('Session expired. Starting over.');
-    response.redirect('/voice');
-    return res.type('text/xml').send(response.toString());
+  if (!session || !session.results) {
+    vr.say('Session expired. Let us start over.');
+    vr.redirect('/voice');
+    return res.type('text/xml').send(vr.toString());
   }
 
   if (digit === '0') {
-    response.say('Thank you for calling Auto Parts Finder. Goodbye!');
-    response.hangup();
+    vr.say('Thank you for calling. Goodbye.');
+    vr.hangup();
     delete sessions[callSid];
-    return res.type('text/xml').send(response.toString());
+    return res.type('text/xml').send(vr.toString());
   }
 
   if (digit === '9') {
-    // Read cart and create quote
-    if (session.cart && session.cart.length > 0) {
-      const total = session.cart.reduce((sum, item) => sum + item.price, 0);
-      response.say(`Your cart has ${session.cart.length} items, total ${total.toFixed(2)} dollars.`);
-      response.say('Thank you for your quote request. Our sales team will contact you shortly.');
-      response.say('Goodbye!');
-      response.hangup();
-      delete sessions[callSid];
-    } else {
-      response.say('Your cart is empty.');
-      response.redirect('/process-speech'); // Go back to product listing
+    const cart = session.cart || [];
+    if (cart.length === 0) {
+      vr.say('Your cart is empty.');
+      vr.redirect('/process-speech');
+      return res.type('text/xml').send(vr.toString());
     }
-    return res.type('text/xml').send(response.toString());
+    const total = cart.reduce((s, it) => s + it.price, 0).toFixed(2);
+    vr.say(`Your cart has ${cart.length} items. Total is ${total} dollars. We will email your quote. Goodbye.`);
+    vr.hangup();
+    delete sessions[callSid];
+    return res.type('text/xml').send(vr.toString());
   }
 
-  const index = parseInt(digit, 10) - 1;
-  if (index >= 0 && index < session.searchResults.length) {
-    session.cart = session.cart || [];
-    const item = session.searchResults[index];
-    session.cart.push(item);
-    response.say(`${item.title} added to your cart.`);
-    // Repeat choices
-    session.searchResults.forEach((p, i) => {
-      response.say(`Press ${i + 1} to add ${p.title} priced at ${p.price} dollars to your cart.`);
+  // add item mapping
+  const idx = parseInt(digit, 10) - 1;
+  if (idx >= 0 && idx < session.results.length) {
+    session.cart.push(session.results[idx]);
+    vr.say(`${session.results[idx].title} added to cart.`);
+    // repeat choices
+    session.results.slice(0, 5).forEach((p, i) => {
+      vr.say(`Press ${i + 1} to add ${p.title}.`);
     });
-    response.say('Press 9 to hear your cart and get a quote.');
-    response.say('Press 0 to end the call.');
-
-    const gather = response.gather({
-      numDigits: 1,
-      action: '/handle-choice',
-      method: 'POST',
-      timeout: 10
-    });
-    return res.type('text/xml').send(response.toString());
+    vr.say('Press 9 to hear your cart and get a quote. Press 0 to end this call.');
+    vr.gather({ numDigits: 1, action: '/handle-choice', method: 'POST', timeout: 12 });
+    return res.type('text/xml').send(vr.toString());
   }
 
-  // Invalid input
-  response.say('Invalid choice. Please try again.');
-  response.redirect('/process-speech');
-  return res.type('text/xml').send(response.toString());
+  vr.say('Sorry, invalid choice. Redirecting to start.');
+  vr.redirect('/voice');
+  res.type('text/xml').send(vr.toString());
 });
 
-// Start Express server
-const port = process.env.PORT || 4000;
-app.listen(port, () => console.log(`Server listening on port ${port}`));
-
-
-
-
-
-
-
-
-
-
-
-
+// start
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => console.log(`Backend listening on ${PORT}`));
